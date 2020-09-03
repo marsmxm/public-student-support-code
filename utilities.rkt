@@ -1,3 +1,15 @@
+;;
+;;   WARNING!!!!
+;;
+;;   The original version of this file lives in the course-compiler repository.
+;;   There is a copy of this file in the public-student-support-code
+;;   repository.
+;;
+;;   DO NOT EDIT the version of this file in public-student-support-code
+;;   because any changes you make will be OBLITERATED the next time
+;;   someone edits the version in the course-compiler repository
+;;   and then copies it over to public-student-support-code.
+
 #lang racket
 (require racket/struct)
 (require graph)
@@ -31,7 +43,7 @@ Changelog:
 					;(require racket/async-channel)
 (require rackunit rackunit/text-ui rackunit/gui)
 
-(provide debug-level at-debug-level? debug verbose vomit
+(provide debug-level AST-output-syntax at-debug-level? debug verbose vomit
          map2 map3 b2i i2b
          racket-id->c-id 
          hash-union set-union*
@@ -47,35 +59,57 @@ Changelog:
 	 arg-registers rootstack-reg register->color color->register
          registers align byte-reg->full-reg print-by-type strip-has-type
          make-lets dict-set-all dict-remove-all goto-label get-CFG 
-         symbol-append any-tag
+         symbol-append any-tag parse-program
          
-         (struct-out Prim) (struct-out Var)
-         (struct-out Int) (struct-out Let)
-         (struct-out Program) (struct-out ProgramDefs)
-         (struct-out Bool) (struct-out If)
-         (struct-out HasType)
+         (contract-out [struct Prim ((op symbol?) (arg* exp-list?))])
+         (contract-out [struct Var ((name symbol?))])
+         (contract-out [struct Int ((value fixnum?))])
+         (contract-out [struct Let ((var symbol?) (rhs exp?) (body exp?))])
+         (struct-out Program)
+         (struct-out ProgramDefs)
+         (contract-out [struct Bool ((value boolean?))])
+         (contract-out [struct If ((cnd exp?) (thn exp?) (els exp?))])
+         (contract-out [struct HasType ((expr exp?) (type type?))])
          (struct-out Void)
-         (struct-out Apply)
-         (struct-out Def)
-         (struct-out Lambda)
-         (struct-out FunRef) (struct-out FunRefArity)
-         (struct-out Inject) (struct-out Project)
-         (struct-out ValueOf) (struct-out TagOf)
+         (contract-out [struct Apply ((fun exp?) (arg* exp-list?))])
+         (contract-out [struct Def ((name symbol?) (param* param-list?) (rty type?) (info any?)
+                                    (body any?))])
+         (contract-out [struct Lambda ((param* param-list?) (rty type?) (body exp?))])
+         (contract-out [struct FunRef ((name symbol?))])
+         (contract-out [struct FunRefArity ((name symbol?) (arity fixnum?))])
+         (struct-out Inject)
+         (struct-out Project)
+         (struct-out ValueOf)
+         (struct-out TagOf)
            
-         (struct-out Assign) (struct-out Seq) (struct-out Return)
-         (struct-out Goto) (struct-out Collect) (struct-out CollectionNeeded?)
+         (contract-out [struct Assign ((lhs lhs?) (rhs exp?))])
+         (contract-out [struct Seq ((fst stmt?) (snd tail?))])
+         (contract-out [struct Return ((arg exp?))])
+         (contract-out [struct IfStmt ((cnd cmp?) (thn goto?) (els goto?))])
+         (contract-out [struct Goto ((label symbol?))])
+         (struct-out Collect)
+         (struct-out CollectionNeeded?)
          (struct-out GlobalValue)
-         (struct-out Allocate) (struct-out AllocateProxy)
-         (struct-out Call) (struct-out TailCall)
+         (struct-out Allocate)
+         (struct-out AllocateProxy)
+         (contract-out [struct Call ((fun exp?) (arg* exp-list?))])
+         (contract-out [struct TailCall ((fun exp?) (arg* exp-list?))])
          (struct-out CFG)
          
-         (struct-out Imm) (struct-out Reg) (struct-out Deref)
-         (struct-out Instr) (struct-out Callq) (struct-out IndirectCallq)
-         (struct-out Jmp) (struct-out TailJmp)
-         (struct-out Label) (struct-out Block)
+         (contract-out [struct Imm ((value fixnum?))])
+         (contract-out [struct Reg ((name symbol?))])
+         (contract-out [struct Deref ((reg symbol?) (offset fixnum?))])
+         (contract-out [struct Instr ((name symbol?) (arg* arg-list?))])
+         (contract-out [struct Callq ((target symbol?))])
+         (contract-out [struct IndirectCallq ((target arg?))])
+         (struct-out Retq)
+         (contract-out [struct Jmp ((target symbol?))])
+         (contract-out [struct TailJmp ((target arg?))])
+         (contract-out [struct Block ((info any?) (instr* instr-list?))])
          (struct-out StackArg)
 
-         (struct-out JmpIf) (struct-out ByteReg)
+         (contract-out [struct JmpIf ((cnd symbol?) (target symbol?))])
+         (contract-out [struct ByteReg ((name symbol?))])
          )
 
 ;; debug state is a nonnegative integer.
@@ -159,12 +193,89 @@ Changelog:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Abstract Syntax Tree struct definitions
 
+;(define AST-output-syntax (make-parameter 'abstract-syntax))
+(define AST-output-syntax (make-parameter 'concrete-syntax))
+;; the alternative is 'abstract-syntax
+
 (define (make-recur port mode)
   (case mode
     [(#t) write]
     [(#f) display]
     [else (lambda (p port) (print p port mode))]
     ))
+
+;; The following is a hacked version of the
+;; make-constructor-style-printer from Racket's standard library so
+;; that it doesn't use the #<...> notation in not-0 mode.  -Jeremy
+
+(define (make-constr-style-printer get-constructor get-contents)
+  (lambda (obj port mode)
+    (define (recur x p)
+      (case mode
+        ((#t) (write x p))
+        ((#f) (display x p))
+        ((0 1) (print x p mode))))
+
+    ;; Only two cases: 0 vs everything else
+    (define (print-prefix p)
+      (let ([prefix "("
+             #;(case mode
+               ((0) "(")
+               (else "#<"))]
+            [constructor
+             (get-constructor obj)]
+            [post-constr ""
+             #;(case mode
+               ((0) "")
+               (else ":"))])
+        (write-string prefix p)
+        (display constructor p)
+        (write-string post-constr p)))
+
+    (define (print-suffix p)
+      (let ([suffix ")"
+             #;(case mode
+               ((0) ")")
+               (else ">"))])
+        (write-string suffix p)))
+
+    (define (print-contents p leading-space)
+      (let ([lead (if leading-space (make-string (add1 leading-space) #\space) " ")])
+        (for ([elt (get-contents obj)]) ;; note: generic sequence
+          (when leading-space
+            (pretty-print-newline p (pretty-print-columns)))
+          (write-string lead p)
+          (recur elt p))))
+
+    (define (print/one-line p)
+      (print-prefix p)
+      (print-contents p #f)
+      (print-suffix p))
+
+    (define (print/multi-line p)
+      (let-values ([(line col pos) (port-next-location p)])
+        (print-prefix p)
+        (print-contents p col)
+        (print-suffix p)))
+
+    (cond [(and (pretty-printing)
+                (integer? (pretty-print-columns)))
+           ((let/ec esc
+              (letrec ([tport
+                        (make-tentative-pretty-print-output-port
+                         port
+                         (- (pretty-print-columns) 1)
+                         (lambda () 
+                           (esc
+                            (lambda ()
+                              (tentative-pretty-print-port-cancel tport)
+                              (print/multi-line port)))))])
+                (print/one-line tport)
+                (tentative-pretty-print-port-transfer tport port))
+              void))]
+          [else
+           (print/one-line port)])
+    (void)))
 
 (define (newline-and-indent port col)
   (let ([lead (if col (make-string col #\space) "")])
@@ -174,246 +285,544 @@ Changelog:
 
 (struct Var (name) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(Var x)
-        (write x port)]))])
-
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Var)
+                 (lambda (obj) (list (Var-name obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Var x)
+                     (recur x port)]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+       
 (struct Int (value) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(Int n)
-        (write n port)]))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Int)
+                 (lambda (obj) (list (Int-value obj))))])
+       (lambda  (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Int n)
+                     (recur n port)]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-(struct Imm (value) #:transparent
+(struct Prim (op arg*) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(Imm n)
-        (write-string "$" port)
-        (write n port)]))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Prim)
+                 (lambda (obj) (list (Prim-op obj) (Prim-arg* obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Prim op arg*)
+                     (write-string "(" port)
+                     (write-string (symbol->string op) port)
+                     (for ([arg arg*])
+                       (write-string " " port)
+                       (recur arg port))
+                     (write-string ")" port)
+                     ]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]))))])
 
-(struct Prim (op arg*)
+(struct Let (var rhs body) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(Prim op arg*)
-          (write-string "(" port)
-          (write-string (symbol->string op) port)
-          (for ([arg arg*])
-            (write-string " " port)
-            (recur arg port))
-          (write-string ")" port)
-          ])))])
-
-(struct Let (var rhs body)
-  #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(Let x rhs body)
-          (let-values ([(line col pos) (port-next-location port)])
-            (write-string "(let ([" port)
-            (write-string (symbol->string x) port)
-            (write-string " " port)
-            (recur rhs port)
-            (write-string "])" port)
-            (newline-and-indent port col)
-            (write-string "   " port) ;; indent body
-            (recur body port)
-            (write-string ")" port)
-            (newline-and-indent port col)
-            )])))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Let)
+                 (lambda (obj) (list (Let-var obj) (Let-rhs obj)
+                                     (Let-body obj))))])
+       (lambda ( ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Let x rhs body)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write-string "(let ([" port)
+                       (write-string (symbol->string x) port)
+                       (write-string " " port)
+                       (recur rhs port)
+                       (write-string "])" port)
+                       (newline-and-indent port col)
+                       (write-string "   " port) ;; indent body
+                       (recur body port)
+                       (write-string ")" port)
+                       (newline-and-indent port col)
+                       )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
 (struct CFG (block*) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(CFG G)
-          (for/list ([(label tail) (in-dict G)])
-            (write label port)
-            (write-string ":" port)
-            (newline port)
-            (write-string "    " port)
-            (recur tail port)
-            (newline port))])))])
-
-(define (Program-print ast port mode)
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'CFG)
+                 (lambda (obj) (list (CFG-block* obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(CFG G)
+                     (for/list ([(label tail) (in-dict G)])
+                       (recur label port)
+                       (write-string ":" port)
+                       (newline port)
+                       (write-string "    " port)
+                       (recur tail port)
+                       (newline port))]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+     
+(define (print-info info port mode)
   (let ([recur (make-recur port mode)])
-    (match ast
-      [(Program info body)
-       (write-string "program:" port)
-       (newline port)
-       (recur body port) 
-       ])))
+    (for ([(label data) (in-dict info)])
+      (match label
+        ['locals
+         (write-string "locals:" port)
+         (newline port)
+         (cond [(dict? data)
+                (write-string "    " port)
+                (for ([(var type) (in-dict data)])
+                  (write-string (symbol->string var) port)
+                  (write-string " : " port)
+                  (recur type port)
+                  (write-string ", " port)
+                  )
+                (newline port)]
+               [else
+                (recur data port)
+                (newline port)])]
+        [else
+         (write-string (symbol->string label) port)
+         (write-string ":" port)
+         (newline port)
+         (recur data port)
+         (newline port)
+         ]))))
+
 (struct Program (info body) #:transparent
   #:methods gen:custom-write
-  [(define write-proc Program-print)])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Program)
+                 (lambda (obj) (list (Program-info obj) (Program-body obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Program info body)
+                     (write-string "program:" port)
+                     (newline port)
+                     (print-info info port mode)
+                     (cond [(list? body)
+                            (for ([def body])
+                              (recur def port)
+                              (newline port))]
+                           [else
+                            (recur body port)])]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+                ))))])
 
-(define (ProgramDefs-print ast port mode)
-  (let ([recur (make-recur port mode)])
-    (match ast
-      [(ProgramDefs info def* body)
-       (write-string "functions:" port)
-       (newline port)
-       (for ([def def*]) (recur def port))
-       (newline port)
-       (write-string "program:" port)
-       (newline port)
-       (recur body port)
-       ])))
 (struct ProgramDefs (info def* body) #:transparent
   #:methods gen:custom-write
-  [(define write-proc ProgramDefs-print)])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'ProgramDefs)
+                 (lambda (obj) (list (ProgramDefs-info obj)
+                                     (ProgramDefs-def* obj)
+                                     (ProgramDefs-body obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(ProgramDefs info def* body)
+                     (write-string "functions:" port)
+                     (newline port)
+                     (for ([def def*]) (recur def port))
+                     (newline port)
+                     (write-string "program:" port)
+                     (newline port)
+                     (recur body port)
+                     ]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
   
 (struct Bool (value) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(Bool b)
-        (write b port)]))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Bool)
+                 (lambda (obj) (list (Bool-value obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Bool b)
+                     (recur b port)]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-
-(struct If (cnd thn els)
+(struct If (cnd thn els) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(If cnd thn els)
-          (let-values ([(line col pos) (port-next-location port)])
-            (write-string "(if" port)
-            (write-string " " port)
-            (recur cnd port)
-            (newline-and-indent port col)
-            (write-string "   " port) ;; indent 
-            (recur thn port)
-            (newline-and-indent port col)
-            (write-string "   " port) ;; indent 
-            (recur els port)
-            (newline-and-indent port col)
-            (write-string ")" port)
-            )])))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'If)
+                 (lambda (obj) (list (If-cnd obj) (If-thn obj) (If-els obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(If cnd thn els)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write-string "(if" port)
+                       (write-string " " port)
+                       (recur cnd port)
+                       (newline-and-indent port col)
+                       (write-string "   " port) ;; indent 
+                       (recur thn port)
+                       (newline-and-indent port col)
+                       (write-string "   " port) ;; indent 
+                       (recur els port)
+                       (newline-and-indent port col)
+                       (write-string ")" port)
+                       )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]))))])
 
-
-(struct Void () #:transparent)
-
-(struct Apply (fun arg*)
+(struct IfStmt (cnd thn els) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(Apply fun arg*)
-          (write-string "(" port)
-          (recur fun port)
-          (for ([arg arg*])
-            (write-string " " port)
-            (recur arg port))
-          (write-string ")" port)
-          ])))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'IfStmt)
+                 (lambda (obj) (list (IfStmt-cnd obj) (IfStmt-thn obj)
+                                     (IfStmt-els obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(IfStmt cnd thn els)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write-string "if " port)
+                       (recur cnd port)
+                       (write-string " then" port)
+                       (newline-and-indent port col)
+                       (write-string "   " port) ;; indent 
+                       (recur thn port)
+                       (newline-and-indent port col)
+                       (write-string "else" port)
+                       (newline-and-indent port col)            
+                       (write-string "   " port) ;; indent 
+                       (recur els port)
+                       )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+
+(struct Void () #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Void)
+                 (lambda (obj) (list)))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(Void)
+                   (write-string "(void)" port)])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+
+(struct Apply (fun arg*) #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Apply)
+                 (lambda (obj) (list (Apply-fun obj) (Apply-arg* obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Apply fun arg*)
+                     (write-string "(" port)
+                     (recur fun port)
+                     (for ([arg arg*])
+                       (write-string " " port)
+                       (recur arg port))
+                     (write-string ")" port)
+                     ]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+           
+(define (write-type ty port)
+  (match ty
+    [`(Vector ,tys ...)
+     (write-string "(Vector" port)
+     (for ([ty tys])
+       (write-string " " port)
+       (write-type ty port))
+     (write-string ")" port)]
+    [`(,t1 -> ,t2)
+     (write-string "(" port)
+     (write-type t1 port)
+     (write-string " -> " port)
+     (write-type t2 port)
+     (write-string ")" port)]
+    [(? symbol?)
+     (write-string (symbol->string ty) port)]
+    [else
+     (write-string "_" port)
+     ]))
   
-(struct Def (name param* rty info body)
+(define (write-params param* port)
+  (for ([param param*])
+    (match param
+      [`(,x : ,t)
+       (write-string " " port)
+       (write-string "[" port)
+       (write-string (symbol->string x) port)
+       (write-string " : " port)
+       (write-type t port)
+       (write-string "]" port)])))
+
+(struct Def (name param* rty info body) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(Def name ps rty info body)
-          (let-values ([(line col pos) (port-next-location port)])
-            (write-string "(define " port)
-            (write-string (symbol->string name) port)
-            (write-string " " port)
-            (recur ps port)
-            (write-string " " port)
-            (recur rty port)
-            (newline-and-indent port col)
-            (write-string "   " port)
-            (recur body port) ;; this needs work -Jeremy
-            (write-string ")" port)
-            (newline-and-indent port col)            
-            )
-          ])))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Def)
+                 (lambda (obj) (list (Def-name obj) (Def-param* obj)
+                                     (Def-rty obj) (Def-info obj)
+                                     (Def-body obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Def name ps rty info body)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write-string "(define (" port)
+                       (write-string (symbol->string name) port)
+                       (write-string " " port)
+                       (write-params ps port)
+                       (write-string ") " port)
+                       (write-string ":" port)
+                       (write-string " " port)
+                       (write-type rty port)
+                       (newline-and-indent port col)
+                       (write-string "   " port)
+                       (cond [(list? body)
+                              (for ([block body])
+                                (cond [(pair? block)
+                                       (write-string (symbol->string (car block)) port)
+                                       (write-string ":" port)
+                                       (newline-and-indent port col)
+                                       (write-string "      " port)
+                                       (recur (cdr block) port)
+                                       (newline-and-indent port col)
+                                       (write-string "   " port)]
+                                      [else
+                                       (recur block port)
+                                       (newline-and-indent port col)
+                                       (write-string "   " port)]))]
+                             [else
+                              (recur body port)])
+                       (newline-and-indent port col)            
+                       (write-string ")" port)
+                       )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+
+(struct Lambda (param* rty body) #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Lambda)
+                 (lambda (obj) (list (Lambda-param* obj) (Lambda-rty obj)
+                                     (Lambda-body obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Lambda ps rty body)
+                     (let-values ([(line col pos) (port-next-location port)])
+                     (write-string "(lambda: " port)
+                     (write-params ps port)
+                     (write-string " " port)
+                     (write-string ":" port)
+                     (write-string " " port)
+                     (write-type rty port)
+                     (newline-and-indent port col)
+                     (write-string "   " port)
+                     (recur body port)
+                     (write-string ")" port)
+                     (newline-and-indent port col)
+                     )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
   
-(struct Lambda (param* rty body) #:transparent)
 (struct Inject (value type) #:transparent)
 (struct ValueOf (value type) #:transparent)
 (struct TagOf (value) #:transparent)
 (struct Project (value type)  #:transparent)
   
-(struct FunRef (name)
+(struct FunRef (name) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(FunRef f)
-        (write f port)]))])
-  
-(struct FunRefArity (name arity) #:transparent)
-  
-(define (Assign-print assign port mode)
-  (let ([recur (make-recur port mode)])
-    (match assign
-      [(Assign lhs rhs)
-       (let-values ([(line col pos) (port-next-location port)])
-         (recur lhs port)
-         (write-string " " port)
-         (write-string "=" port)
-         (write-string " " port)
-         (recur rhs port)
-         (write-string ";" port)
-         (newline-and-indent port col))         
-       ])))
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+             (lambda (obj) 'FunRef)
+             (lambda (obj) (list (FunRef-name obj))))])
+       (lambda (ast port mode)
+     (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+              (let ([recur (make-recur port mode)])
+                (match ast
+                  [(FunRef f)
+                   (recur f port)]))]
+           [(eq? (AST-output-syntax) 'abstract-syntax)
+            (csp ast port mode)]
+           ))))])
+           
+(struct FunRefArity (name arity) #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'FunRefArity)
+                 (lambda (obj) (list (FunRefArity-name obj)
+                                     (FunRefArity-arity obj))))])
+       (lambda (ast port mode)
+     (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+              (let ([recur (make-recur port mode)])
+                (match ast
+                  [(FunRefArity f n)
+                   (recur f port)
+                   (write-string "{" port)
+                   (recur n port)
+                   (write-string "}" port)
+                   ]))]
+           [(eq? (AST-output-syntax) 'abstract-syntax)
+            (csp ast port mode)]
+           ))))])
+
 (struct Assign (lhs rhs) #:transparent
   #:methods gen:custom-write
-  [(define write-proc Assign-print)])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Assign)
+                 (lambda (obj) (list (Assign-lhs obj) (Assign-rhs obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Assign lhs rhs)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (recur lhs port)
+                       (write-string " " port)
+                       (write-string "=" port)
+                       (write-string " " port)
+                       (recur rhs port)
+                       (write-string ";" port)
+                       )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]))))])
 
-(define (Seq-print ast port mode)
-  (let ([recur (make-recur port mode)])
-    (match ast
-      [(Seq fst snd)
-       (recur fst port)
-       (recur snd port)])))
 (struct Seq (fst snd) #:transparent
   #:methods gen:custom-write
-  [(define write-proc Seq-print)])
-  
-(define (Return-print ast port mode)
-  (let ([recur (make-recur port mode)])
-    (match ast
-      [(Return e)
-       (let-values ([(line col pos) (port-next-location port)])
-         (write-string "return" port)
-         (write-string " " port)
-         (recur e port)
-         (write-string ";" port)
-         (newline-and-indent port col))
-       ])))
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+             (lambda (obj) 'Seq)
+             (lambda (obj) (list (Seq-fst obj) (Seq-snd obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Seq fst snd)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (recur fst port)
+                       (newline-and-indent port col)
+                       (recur snd port)
+                       )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+           
 (struct Return (arg) #:transparent
   #:methods gen:custom-write
-  [(define write-proc Return-print)])
-
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Return)
+                 (lambda (obj) (list (Return-arg obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Return e)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write-string "return" port)
+                       (write-string " " port)
+                       (recur e port)
+                       (write-string ";" port)
+                       )
+                     ]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+           
 (struct Goto (label) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(Goto label)
-        (write-string "goto" port)
-        (write-string " " port)
-        (write label port)
-        (write-string ";" port)
-        ]))])
-
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Goto)
+                 (lambda (obj) (list (Goto-label obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Goto label)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write-string "goto" port)
+                       (write-string " " port)
+                       (recur label port)
+                       (write-string ";" port)
+                       )]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
 (struct HasType (expr type) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(HasType expr type)
-          (recur expr port)
-          ])))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'HasType)
+                 (lambda (obj) (list (HasType-expr obj) (HasType-type obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(HasType expr type)
+                     (recur expr port)
+                     ]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-(struct GlobalValue (name)
+(struct GlobalValue (name) #:transparent
   #:methods gen:custom-write
   [(define (write-proc ast port mode)
      (match ast
@@ -421,11 +830,37 @@ Changelog:
         (write-string (symbol->string name) port)
         ]))])
   
-(struct Collect (size) #:transparent)
+(struct Collect (size) #:transparent
+  #:methods gen:custom-write
+  [(define (write-proc ast port mode)
+     (match ast
+       [(Collect size)
+        (let-values ([(line col pos) (port-next-location port)])
+          (write-string "(collect " port)
+          (write size port)
+          (write-string ");" port)
+          )
+        ]))])
+  
 (struct CollectionNeeded? (size) #:transparent)
-(struct Allocate (amount type) #:transparent)
+
+(struct Allocate (amount type) #:transparent
+  #:methods gen:custom-write
+  [(define (write-proc ast port mode)
+     (match ast
+       [(Allocate amount type)
+        (let-values ([(line col pos) (port-next-location port)])
+          (write-string "(allocate " port)
+          (write amount port)
+          (write-string " " port)
+          (write-type type port)
+          (write-string ")" port)
+          )
+        ]))])
+
 (struct AllocateProxy (type) #:transparent)
-(struct Call (fun arg*)
+
+(struct Call (fun arg*) #:transparent
   #:methods gen:custom-write
   [(define (write-proc ast port mode)
      (let ([recur (make-recur port mode)])
@@ -439,7 +874,7 @@ Changelog:
           (write-string ")" port)
           ])))])
 
-(struct TailCall (fun arg*)
+(struct TailCall (fun arg*) #:transparent
   #:methods gen:custom-write
   [(define (write-proc ast port mode)
      (let ([recur (make-recur port mode)])
@@ -453,55 +888,122 @@ Changelog:
           (write-string ")" port)
           ])))])
 
-(define (Reg-print reg port mode)
-  (match reg
-    [(Reg r)
-     (write-string "%" port)
-     (write r port)]))
+(struct Imm (value) #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Imm)
+                 (lambda (obj) (list (Imm-value obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(Imm n)
+                   (write-string "$" port)
+                   (write n port)])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+
 (struct Reg (name) #:transparent
   #:methods gen:custom-write
-  [(define write-proc Reg-print)])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Reg)
+                 (lambda (obj) (list (Reg-name obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(Reg r)
+                   (write-string "%" port)
+                   (write r port)])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-(define (Deref-print dr port mode)
-  (match dr
-    [(Deref reg offset)
-     (write offset port)
-     (write-string "(" port)
-     (write-string "%" port)
-     (write reg port)
-     (write-string ")" port)
-     ]))
 (struct Deref (reg offset) #:transparent
   #:methods gen:custom-write
-  [(define write-proc Deref-print)])
-
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Deref)
+                 (lambda (obj) (list (Deref-reg obj) (Deref-offset obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(Deref reg offset)
+                   (write offset port)
+                   (write-string "(" port)
+                   (write-string "%" port)
+                   (write reg port)
+                   (write-string ")" port)
+                   ])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+               
 (struct Instr (name arg*) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (let ([recur (make-recur port mode)])
-       (match ast
-         [(Instr name arg*)
-          (let-values ([(line col pos) (port-next-location port)])
-            (write name port)
-            (for ([arg arg*])
-              (write-string " " port)
-              (recur arg port))
-            (newline-and-indent port col)
-            )])))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Instr)
+                 (lambda (obj) (list (Instr-name obj) (Instr-arg* obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Instr name arg*)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write name port)
+                       (let ([i 0])
+                         (for ([arg arg*])
+                           (cond [(not (eq? i 0))
+                                  (write-string "," port)])
+                           (write-string " " port)
+                           (recur arg port)
+                           (set! i (add1 i))
+                           ))
+                       (newline-and-indent port col))]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-(struct Callq (target)
+(struct Callq (target) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(Callq target)
-        (let-values ([(line col pos) (port-next-location port)])
-          (write-string "callq" port)
-          (write-string " " port)
-          (write target port)
-          (newline-and-indent port col))
-        ]))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Callq)
+                 (lambda (obj) (list (Callq-target obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Callq target)
+                     (let-values ([(line col pos) (port-next-location port)])
+                       (write-string "callq" port)
+                       (write-string " " port)
+                       (recur target port)
+                       (newline-and-indent port col))]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-(struct IndirectCallq (target)
+(struct Retq () #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Retq)
+                 (lambda (obj) (list)))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(Retq)
+                   (let-values ([(line col pos) (port-next-location port)])
+                     (write-string "retq" port)
+                     (newline-and-indent port col))])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
+
+(struct IndirectCallq (target) #:transparent
   #:methods gen:custom-write
   [(define (write-proc ast port mode)
      (let ([recur (make-recur port mode)])
@@ -516,49 +1018,208 @@ Changelog:
 
 (struct Jmp (target) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(Jmp target)
-        (let-values ([(line col pos) (port-next-location port)])
-          (write-string "jmp" port)
-          (write-string " " port)
-          (write target port)
-          (newline-and-indent port col))
-        ]))])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Jmp)
+                 (lambda (obj) (list (Jmp-target obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(Jmp target)
+                   (let-values ([(line col pos) (port-next-location port)])
+                     (write-string "jmp" port)
+                     (write-string " " port)
+                     (write target port)
+                     (newline-and-indent port col))])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
   
-(struct TailJmp (target) #:transparent)
-(struct Label (instr) #:transparent)
+(struct TailJmp (target) #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'TailJmp)
+                 (lambda (obj) (list (TailJmp-target obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(TailJmp target)
+                   (let-values ([(line col pos) (port-next-location port)])
+                     (write-string "tailjmp" port)
+                     (write-string " " port)
+                     (write target port)
+                     (newline-and-indent port col))])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-
-(define (Block-print bl port mode)
-  (let ([recur (make-recur port mode)])
-    (match bl
-      [(Block info instr*)
-       (for ([instr instr*])
-         (recur instr port))
-       ])))
 (struct Block (info instr*) #:transparent
   #:methods gen:custom-write
-  [(define write-proc Block-print)])
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'Block)
+                 (lambda (obj) (list (Block-info obj) (Block-instr* obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (let ([recur (make-recur port mode)])
+                  (match ast
+                    [(Block info instr*)
+                     (for ([instr instr*])
+                       (recur instr port))
+                     ]))]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
 
-(struct StackArg (number) #:transparent)
+(struct StackArg (number) #:transparent) ;; no longer needed? -Jeremy
 
-(struct ByteReg (name) #:transparent)
-
-(struct JmpIf (cnd target)
+(struct ByteReg (name) #:transparent
   #:methods gen:custom-write
-  [(define (write-proc ast port mode)
-     (match ast
-       [(JmpIf cnd target)
-        (let-values ([(line col pos) (port-next-location port)])
-          (write-string "j" port)
-          (write cnd port)
-          (write-string " " port)
-          (write target port)
-          (newline-and-indent port col))
-        ]))])
+  [(define (write-proc reg port mode)
+     (match reg
+       [(ByteReg r)
+        (write-string "%" port)
+        (write r port)]))])
+
+(struct JmpIf (cnd target) #:transparent
+  #:methods gen:custom-write
+  [(define write-proc
+     (let ([csp (make-constr-style-printer
+                 (lambda (obj) 'JmpIf)
+                 (lambda (obj) (list (JmpIf-cnd obj) (JmpIf-target obj))))])
+       (lambda (ast port mode)
+         (cond [(eq? (AST-output-syntax) 'concrete-syntax)
+                (match ast
+                  [(JmpIf cnd target)
+                   (let-values ([(line col pos) (port-next-location port)])
+                     (write-string "j" port)
+                     (write cnd port)
+                     (write-string " " port)
+                     (write target port)
+                     (newline-and-indent port col))])]
+               [(eq? (AST-output-syntax) 'abstract-syntax)
+                (csp ast port mode)]
+               ))))])
   
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; predicates for contracts on structs
+
+(define (any? e) #t)
+
+(define (param-list? ps)
+  (or (null? ps)
+      (and (param? (car ps))
+           (param-list? (cdr ps)))))
+
+(define (param? p)
+  (match p
+    [`(,x : ,t) (and (symbol? x) (type? t))]
+    [else #f]))
+
+(define (exp-list? es)
+  (or (null? es)
+      (and (exp? (car es))
+           (exp-list? (cdr es)))))
+
+(define (exp? e)
+  (match e
+    [(Var x) #t]
+    [(Int n) #t]
+    [(Bool b) #t]
+    [(Void) #t]
+    [(Let x rhs body) #t]
+    [(Lambda ps rt body) #t]
+    [(Prim op es) #t]
+    [(Apply e es) #t]
+    [(GlobalValue n) #t]
+    [(Allocate n t) #t]
+    [(If cnd thn els) #t]
+    [(HasType e t) #t]
+    [(Collect s) #t] ;; update figure in book? see expose-alloc-exp in vectors.rkt
+    [(Apply e e*) #t]
+    [(FunRef f) #t]
+    [(Call f e*) #t]
+    [else #f]))
+
+(define (type? t)
+  (match t
+    [`(Vector ,ts ...) #t]
+    ['Integer #t]
+    ['Boolean #t]
+    ['Void #t]
+    [`(,ts ... -> ,t) #t]
+    ['() #t] ;; for when a type is not specified
+    ['_ #t]  ;; also for when a type is not specified
+    [else #f]))
+
+(define (lhs? v)
+  (match v
+    [(Var x) #t]
+    [(Reg r) #t]
+    [else #f]))
+
+(define (stmt? s)
+  (match s
+    [(Assign x e) #t]
+    [(Collect n) #t]
+    [else #f]))
+
+(define (tail? t)
+  (match t
+    [(Return e) #t]
+    [(Seq s t) #t]
+    [(Goto l) #t]
+    [(IfStmt cnd els thn) #t]
+    [(TailCall f arg*) #t]
+    [else #f]))
+
+(define (goto? s)
+  (match s
+    [(Goto l) #t]
+    [else #f]))
+
+(define (cmp? e)
+  (match e
+    [(Prim cmp (list arg1 arg2)) #t] ;; should also check cmp -Jeremy
+    [else #f]))
+
+(define (arg? arg)
+  (match arg
+    [(Imm n) #t]
+    [(Var x) #t]
+    [(Reg r) #t]
+    [(Deref r n) #t]
+    [(ByteReg r) #t]
+    [(? symbol?) #t] ;; for condition code in set instruction
+    [(GlobalValue name) #t]
+    [(FunRef f) #t]
+    [else #f]))
+
+(define (arg-list? es)
+  (or (null? es)
+      (and (arg? (car es))
+           (arg-list? (cdr es)))))
+
+(define (instr? ins)
+  (match ins
+    [(Instr n arg*) #t]
+    [(Callq t) #t]
+    [(IndirectCallq a) #t]
+    [(Jmp t) #t]
+    [(TailJmp t) #t]
+    [(JmpIf c t) #t]
+    [else #f]
+    ))
+
+(define (instr-list? es)
+  (or (null? es)
+      (and (instr? (car es))
+           (instr-list? (cdr es)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Parsing S-expressions into Abstract Syntax Trees (and back)
+
 
 (define src-primitives
   '(read + - eq? < <= > >= and or not vector vector-ref vector-set!))
@@ -595,6 +1256,24 @@ Changelog:
                   (for/list ([d def*]) (parse-def d))
                   (parse-exp body))]
     ))
+
+(define (unparse-exp e)
+  (match e
+    [(Var x) x]
+    [(Int n) n]
+    [(Bool b) b]
+    [(Void) '(void)]
+    [(Let x rhs body)
+     `(let ([,x ,(unparse-exp rhs)]) ,(unparse-exp body))]
+    [(Lambda ps rt body)
+     `(lambda: ,ps ,rt ,(unparse-exp body))]
+    [(Prim op es)
+     `(,op ,@(map unparse-exp es))]
+    [(Apply e es)
+     `(,(unparse-exp e) ,@(map unparse-exp es))]
+    ))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define-syntax-rule (while condition body ...)
   (let loop ()

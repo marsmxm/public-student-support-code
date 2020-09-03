@@ -6,6 +6,7 @@
 (require "interp.rkt")
 (require "compiler.rkt")
 ;; (debug-level 1)
+;; (AST-output-syntax 'abstract-syntax)
 
 ;; Define the passes to be used by interp-tests and the grader
 ;; Note that your compiler file (or whatever file provides your passes)
@@ -19,6 +20,20 @@
      ("patch instructions" ,patch-instructions ,R1-interp-x86)
      ("print x86" ,print-x86 #f)
      ))
+
+(define all-tests
+  (map (lambda (p) (car (string-split (path->string p) ".")))
+       (filter (lambda (p)
+                 (string=? (cadr (string-split (path->string p) ".")) "rkt"))
+               (directory-list (build-path (current-directory) "tests")))))
+
+(define (tests-for r)
+  (map (lambda (p)
+         (cadr (string-split p "_")))
+       (filter
+        (lambda (p)
+          (string=? r (car (string-split p "_"))))
+        all-tests)))
 
 (interp-tests "r1" #f r1-passes interp-R1 "r1" (tests-for "r1"))
 (compiler-tests "r1" #f r1-passes "r1" (tests-for "r1"))
