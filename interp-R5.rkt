@@ -8,7 +8,7 @@
 ;;   kept in sync with this code.
 
 (define primitives (set '+ '-  'read
-                        'eq? '< '<= '> '>= 'not
+                        'eq? '< '<= '> '>= 'not 'or
                         'vector 'vector-ref 'vector-set!))
 
 (define (interp-op op)
@@ -17,6 +17,9 @@
     ['- fx-]
     ['read read-fixnum]
     ['not (lambda (v) (match v [#t #f] [#f #t]))]
+    ['or (lambda (v1 v2)
+           (cond [(and (boolean? v1) (boolean? v2))
+                  (or v1 v2)]))]
     ['eq? (lambda (v1 v2)
 	    (cond [(or (and (fixnum? v1) (fixnum? v2))
 		       (and (boolean? v1) (boolean? v2))
@@ -90,7 +93,7 @@
 (define (interp-R5 p)
   (verbose "interp-R5" p)
   (match p
-    [(ProgramDefs info ds body)
+    [(ProgramDefsExp info ds body)
      (let ([top-level (for/list ([d ds]) (interp-def d))])
        (for/list ([b top-level])
          (set-mcdr! b (match (mcdr b)
@@ -99,7 +102,7 @@
        ((interp-exp top-level) body))]
     
     ;; For after the shrink pass.
-    [(Program info ds)
+    [(ProgramDefs info ds)
      (let ([top-level (for/list ([d ds]) (interp-def d))])
        (for ([b top-level])
          (set-mcdr! b (match (mcdr b)
