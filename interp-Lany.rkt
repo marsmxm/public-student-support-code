@@ -1,19 +1,19 @@
 #lang racket
 (require racket/fixnum)
 (require "utilities.rkt")
-(require "interp-Rlambda.rkt")
-(provide interp-Rany interp-Rany-class)
+(require "interp-Llambda.rkt")
+(provide interp-Lany interp-Lany-class)
 
 ;; Note to maintainers of this code:
 ;;   A copy of this interpreter is in the book and should be
 ;;   kept in sync with this code.
 
-(define interp-Rany-class
-  (class interp-Rlambda-class
+(define interp-Lany-class
+  (class interp-Llambda-class
     (super-new)
 
     (define/override (interp-op op)
-      (verbose "Rany/interp-op" op)
+      (verbose "Lany/interp-op" op)
       (match op
         ['boolean? (match-lambda [(Tagged v1 tg) (eq? tg (any-tag 'Boolean))])]
         ['integer? (match-lambda [(Tagged v1 tg) (eq? tg (any-tag 'Integer))])]
@@ -31,7 +31,13 @@
         ['any-vector-set! (lambda (v i a)
                             (match v [(Tagged v^ tg) (vector-set! v^ i a)]))]
         ['any-vector-length (lambda (v)
-                            (match v [(Tagged v^ tg) (vector-length v^)]))]
+                              (match v [(Tagged v^ tg) (vector-length v^)]))]
+        ['any-vectorof-ref (lambda (v i)
+                             (match v [(Tagged v^ tg) (vector-ref v^ i)]))]
+        ['any-vectorof-set! (lambda (v i a)
+                              (match v [(Tagged v^ tg) (vector-set! v^ i a)]))]
+        ['any-vectorof-length (lambda (v)
+                              (match v [(Tagged v^ tg) (vector-length v^)]))]
         [else (super interp-op op)]))
 
     (define/public (apply-inject v tg) (Tagged v tg))
@@ -51,7 +57,7 @@
                               l1 (length ts))])]
               [`(,ts ... -> ,rt)
                (match v1
-                 [`(function ,xs ,body ,env)
+                 [(Function xs body env)
                   (cond [(eq? (length xs) (length ts)) v1]
                         [else
                          (error 'apply-project "arity mismatch ~a != ~a"
@@ -63,12 +69,12 @@
     
     (define/override ((interp-exp env) e)
       (define recur (interp-exp env))
-      (verbose "Rany/interp-exp" e)
+      (verbose "Lany/interp-exp" e)
       (match e
         [(Inject e ty) (apply-inject (recur e) (any-tag ty))]
         [(Project e ty2)  (apply-project (recur e) ty2)]
         [else ((super interp-exp env) e)]))
     ))
 
-(define (interp-Rany p)
-  (send (new interp-Rany-class) interp-program p))
+(define (interp-Lany p)
+  (send (new interp-Lany-class) interp-program p))

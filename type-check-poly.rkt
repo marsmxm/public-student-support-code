@@ -1,11 +1,11 @@
 #lang racket
 (require "utilities.rkt")
-(require "type-check-Rwhile.rkt")
+(require "type-check-Llambda.rkt")
 
 (provide type-check-poly type-check-poly-class)
 
 (define type-check-poly-class
-  (class type-check-Rwhile-class
+  (class type-check-Llambda-class
     (super-new)
     (inherit check-type-equal?)
 
@@ -19,21 +19,21 @@
         [(other wise)
          (super type-equal? t1 t2)]))
     
-    (define/public (match-types env pat1 t2)
-      (verbose 'type-check "match-types" env pat1 t2)
+    (define/public (match-types env param_ty arg_ty)
+      (verbose 'type-check "match-types" env param_ty arg_ty)
       (define result
-      (match* (pat1 t2)
+      (match* (param_ty arg_ty)
         [('Integer 'Integer) env]
         [('Boolean 'Boolean) env]
         [('Void 'Void) env]
         [('Any 'Any) env]
         [(`(Vector ,ts1 ...) `(Vector ,ts2 ...))
          (for/fold ([env^ env]) ([pat1 ts1] [t2 ts2])
-           (match-types env^ t2 t2))]
+           (match-types env^ pat1 t2))]
         [(`(,ts1 ... -> ,rt1) `(,ts2 ... -> ,rt2))
          (define env^ (match-types env rt1 rt2))
          (for/fold ([env^^ env^]) ([pat1 ts1] [t2 ts2])
-           (match-types env^^ t2 t2))]
+           (match-types env^^ pat1 t2))]
         [(`(All ,xs1 ,t1) `(All ,xs2 ,t2))
          (define env^ (append (map cons xs1 xs2) env))
          (match-types env^ t1 t2)]
@@ -42,8 +42,8 @@
            [#f (error 'type-check "undefined type variable ~a" x)]
            ['Type (cons (cons x t) env)]
            [t^ (check-type-equal? t t^ 'matching) env])]
-        [(other wise) (error 'type-check "mismatch ~a != a" pat1 t2)]))
-      (copious 'match-types "done" pat1 t2 result)
+        [(other wise) (error 'type-check "mismatch ~a != a" param_ty arg_ty)]))
+      (copious 'match-types "done" param_ty arg_ty result)
       result)
 
     (define/public (subst-type env pat1)

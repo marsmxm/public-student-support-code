@@ -1,12 +1,17 @@
 #lang racket
 (require racket/set racket/stream)
 (require racket/fixnum)
-(require "interp-Rint.rkt")
+(require "interp-Lint.rkt")
+(require "interp-Lvar.rkt")
+(require "interp-Cvar.rkt")
+(require "interp.rkt")
+(require "type-check-Lvar.rkt")
+(require "type-check-Cvar.rkt")
 (require "utilities.rkt")
 (provide (all-defined-out))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Rint examples
+;; Lint examples
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; The following compiler pass is just a silly one that doesn't change
@@ -19,7 +24,7 @@
     [(Prim '- (list e1)) (Prim '- (list (flip-exp e1)))]
     [(Prim '+ (list e1 e2)) (Prim '+ (list (flip-exp e2) (flip-exp e1)))]))
 
-(define (flip-Rint e)
+(define (flip-Lint e)
   (match e
     [(Program info e) (Program info (flip-exp e))]))
 
@@ -42,7 +47,7 @@
     [(Prim '- (list e1)) (pe-neg (pe-exp e1))]
     [(Prim '+ (list e1 e2)) (pe-add (pe-exp e1) (pe-exp e2))]))
 
-(define (pe-Rint p)
+(define (pe-Lint p)
   (match p
     [(Program info e) (Program info (pe-exp e))]))
 
@@ -54,38 +59,53 @@
   (lambda (e)
     (match e
       [(Var x)
-       (error "TODO: code goes here (uniquify-exp, symbol?)")]
+       (error "TODO: code goes here (uniquify-exp Var)")]
       [(Int n) (Int n)]
       [(Let x e body)
-       (error "TODO: code goes here (uniquify-exp, let)")]
+       (error "TODO: code goes here (uniquify-exp Let)")]
       [(Prim op es)
        (Prim op (for/list ([e es]) ((uniquify-exp env) e)))])))
 
-;; uniquify : R1 -> R1
+;; uniquify : Lvar -> Lvar
 (define (uniquify p)
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
 
-;; remove-complex-opera* : R1 -> R1
+;; remove-complex-opera* : Lvar -> Lvar^mon
 (define (remove-complex-opera* p)
   (error "TODO: code goes here (remove-complex-opera*)"))
 
-;; explicate-control : R1 -> C0
+;; explicate-control : Lvar^mon -> Cvar
 (define (explicate-control p)
   (error "TODO: code goes here (explicate-control)"))
 
-;; select-instructions : C0 -> pseudo-x86
+;; select-instructions : Cvar -> x86var
 (define (select-instructions p)
   (error "TODO: code goes here (select-instructions)"))
 
-;; assign-homes : pseudo-x86 -> pseudo-x86
+;; assign-homes : x86var -> x86var
 (define (assign-homes p)
   (error "TODO: code goes here (assign-homes)"))
 
-;; patch-instructions : psuedo-x86 -> x86
+;; patch-instructions : x86var -> x86int
 (define (patch-instructions p)
   (error "TODO: code goes here (patch-instructions)"))
 
-;; print-x86 : x86 -> string
-(define (print-x86 p)
-  (error "TODO: code goes here (print-x86)"))
+;; prelude-and-conclusion : x86int -> x86int
+(define (prelude-and-conclusion p)
+  (error "TODO: code goes here (prelude-and-conclusion)"))
+
+;; Define the compiler passes to be used by interp-tests and the grader
+;; Note that your compiler file (the file that defines the passes)
+;; must be named "compiler.rkt"
+(define compiler-passes
+  `(
+     ;; Uncomment the following passes as you finish them.
+     ;; ("uniquify" ,uniquify ,interp-Lvar ,type-check-Lvar)
+     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
+     ;; ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
+     ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-0)
+     ;; ("assign homes" ,assign-homes ,interp-x86-0)
+     ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
+     ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)
+     ))

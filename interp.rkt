@@ -9,12 +9,13 @@
          interp-pseudo-x86-4 interp-x86-4
          interp-pseudo-x86-5 interp-x86-5
          interp-R6-class-alt
+         interp-pseudo-x86-python interp-x86-python
          )
 
 ;; The interpreters in this file are for the intermediate languages
 ;; produced by the various passes of the compiler.
 ;; 
-;; The interpreters for the source languages (Rvar, Rif, ...)
+;; The interpreters for the source languages (Lvar, Lif, ...)
 ;; and the C intermediate languages Cvar and Cif
 ;; are in separate files, e.g., interp-Rvar.rkt.
 
@@ -62,6 +63,8 @@
 
 ;; Interpreters for x86 with names that correspond to the book.
 
+;; TODO: update the following names!
+
 (define interp-pseudo-x86-0
   (lambda (p)
     ((send (new interp-R1-class) interp-pseudo-x86 '()) p)))
@@ -83,7 +86,7 @@
     ((send (new interp-R3-class) interp-pseudo-x86 '()) p)))
 
 ;; The interp-x86-2 interpreter takes a program of the form
-;; (X86Program info G)
+;; (X86Program info blocks)
 ;; Also, the info field must be an association list
 ;; with a key 'num-root-spills whose values is 
 ;; the number of spills to the root stack.
@@ -224,8 +227,8 @@
     (define/public (interp-C ast)
       (debug "R1/interp-C" ast)
       (match ast
-        [(CProgram info G)
-         (define start (dict-ref G 'start))
+        [(CProgram info blocks)
+         (define start (dict-ref blocks 'start))
          ((interp-C-tail '()) start)]
         [else (error "no match in interp-C for " ast)]))
 
@@ -297,7 +300,7 @@
 		  [d ((interp-x86-exp env) d)]
 		  [x (get-name d)]
 		  [f (interp-x86-op binary-op)])
-              (let ([v (f d s)])
+              (let ([v (f s d)])
                 (copious "binary-op result " (observe-value v))
                 ((interp-x86-instr (cons (cons x v) env)) ss)))]
 	   [(cons (Instr unary-op (list d)) ss)
@@ -327,9 +330,9 @@
         (when (pair? ast)
           (copious "R1/interp-x86" (car ast)))
         (match ast
-          [(X86Program info G)
-           (parameterize ([get-CFG G])
-             (define start-block (dict-ref G 'start))
+          [(X86Program info blocks)
+           (parameterize ([get-basic-blocks blocks])
+             (define start-block (dict-ref blocks 'start))
              (define result-env ((interp-x86-block '()) start-block))
              (lookup 'rax result-env))]
           [else (error "R1/interp-x86 no match in for" ast)]
@@ -437,9 +440,9 @@
     (define/override (interp-C ast)
       (copious "R2/interp-C" ast)
       (match ast
-        [(CProgram info G)
-         (parameterize ([get-CFG G])
-           (super interp-C (CProgram info G)))]
+        [(CProgram info blocks)
+         (parameterize ([get-basic-blocks blocks])
+           (super interp-C (CProgram info blocks)))]
         [else (error "R2/interp-C unhandled" ast)]
         ))
 
@@ -499,7 +502,7 @@
         (copious "R2/interp-x86-exp" (observe-value result))
         result))
 
-    (define (eflags-status env cc)
+    (define/public (eflags-status env cc)
       (define eflags ((interp-x86-exp env) (Reg '__flag)))
       (match cc
 	 ['e (if (equal? eflags 'equal) 1 0)]
@@ -581,7 +584,7 @@
 	   [fromspace_end   (box uninitialized)]
 	   [rootstack_begin (box uninitialized)]
 	   [global-label-table
-	    (make-immutable-hash
+	    (make-hash
 	     `((free_ptr	 . ,free_ptr)
 	       (fromspace_begin	 . ,fromspace_begin)
 	       (fromspace_end	 . ,fromspace_end)
@@ -861,10 +864,10 @@
     (define/override (interp-C ast)
       (copious "R3/interp-C" ast)
       (match ast
-        [(CProgram info G)
+        [(CProgram info blocks)
          ((initialize!) runtime-config:rootstack-size
                         runtime-config:heap-size)
-         (super interp-C (CProgram info G))]
+         (super interp-C (CProgram info blocks))]
         [else (error "R3/interp-C unhandled" ast)]))
 
     (define/override (interp-x86-exp env)
@@ -952,13 +955,13 @@
       (lambda (ast)
         (copious "R3/interp-pseudo-x86" ast)
 	(match ast
-	  [(X86Program info G)
+	  [(X86Program info blocks)
            ;(define ty (dict-ref info 'type))
 	    ((initialize!) runtime-config:rootstack-size
 	     runtime-config:heap-size)
 	   (define env (cons (cons 'r15 (unbox rootstack_begin)) '()))
-	   (parameterize ([get-CFG G])
-	      (let ([env^ ((interp-x86-block env) (dict-ref G 'start))])
+	   (parameterize ([get-basic-blocks blocks])
+	      (let ([env^ ((interp-x86-block env) (dict-ref blocks 'start))])
 		(lookup 'rax env^)))]
           )))
 
@@ -967,7 +970,7 @@
       (lambda (ast)
         (copious "R3/interp-x86" ast)
 	(match ast
-	  [(X86Program info G)
+	  [(X86Program info blocks)
            ;;#:when (dict-has-key? info 'num-spills)
            (define root-spills (dict-ref info 'num-root-spills))
            (define variable-size 8) ;; ugh -Jeremy
@@ -976,15 +979,18 @@
                           runtime-config:heap-size)
 	   (define env (cons (cons 'r15 (+ root-space (unbox rootstack_begin)))
 			     '()))
-	   (parameterize ([get-CFG G])
-	      (let ([env^ ((interp-x86-block env) (dict-ref G 'start))])
+	   (parameterize ([get-basic-blocks blocks])
+	      (let ([env^ ((interp-x86-block env) (dict-ref blocks 'start))])
 		(lookup 'rax env^)))]
           )))
 
-    (set! x86-ops (hash-set* x86-ops
-		   'sarq `(2 ,(lambda (n v) (arithmetic-shift v (- n))))
-		   ))
-
+    (set! x86-ops
+          (hash-set* x86-ops
+                     'sarq `(2 ,(lambda (n v) (arithmetic-shift v (- n))))
+                     'salq `(2 ,(lambda (n v)
+                                  (crop-to-64bits (arithmetic-shift v n))))
+                     'orq `(2 ,bitwise-ior)
+                     ))
     
     ));; interp-R3-class
 
@@ -999,13 +1005,13 @@
              interp-x86-store)
 
     (inherit-field result rootstack_begin free_ptr fromspace_end
-		   uninitialized)
+		   uninitialized global-label-table)
 
     (define/public (apply-fun interp fun-val arg-vals)
       (match fun-val
         #;[`(tagged ,fun-val^ ,t) ;; for dynamically typed
            (apply-fun interp fun-val^ arg-vals)]
-        [`(function (,xs ...) ,body ,lam-env)
+        [(Function xs body lam-env)
          (define new-env (append (map cons xs arg-vals) lam-env))
          ((interp new-env) body)]
         [else (error 'apply-fun "expected function, not ~a" fun-val)]))
@@ -1017,7 +1023,7 @@
     (define/public (interp-scheme-def d)
       (match d
         [(Def f `([,xs : ,ps] ...) rt info body)
-         (mcons f `(function ,xs ,body ()))]
+         (mcons f (Function xs body '()))]
         ))
 
     (define/override (interp-scheme-exp env)
@@ -1044,8 +1050,8 @@
            (let ([top-level (for/list ([d ds]) (interp-scheme-def d))])
              (for ([b top-level])
                (set-mcdr! b (match (mcdr b)
-                              [`(function ,xs ,body ())
-                               `(function ,xs ,body ,top-level)])))
+                              [(Function xs body '())
+                               (Function xs body top-level)])))
 	     ((interp-scheme-exp top-level) body))]
 	  [else ((super interp-scheme env) ast)]
 	  )))
@@ -1076,16 +1082,14 @@
 	(match ast
 	  ;; For R4
 	  [(Def f `([,xs : ,ps] ...) rt info body)
-	   (cons f `(function ,xs ,body))]
-	  [(FunRef f)
-	   (lookup f env)]
-	  [(FunRefArity f n)
+	   (cons f (Function xs body '()))]
+	  [(FunRef f n)
 	   (lookup f env)]
 	  [(Apply fun args)
 	    (define fun-val ((interp-F env) fun))
 	    (define arg-vals (map (interp-F env) args))
 	    (match fun-val
-	       [`(function (,xs ...) ,body)
+	       [(Function xs body fenv)
 		(define new-env (append (map cons xs arg-vals) env))
 		((interp-F new-env) body)]
 	       [else (error "interp-F, expected function, not" fun-val)])]
@@ -1146,18 +1150,18 @@
       (lambda (ast)
         (define result
 	(match ast
-          [(FunRef f)
+          [(FunRef f n)
            (lookup f env)]
           [(Call f args)
            (define arg-vals (map (interp-C-exp env) args))
            (define f-val ((interp-C-exp env) f))
            (match f-val
-             [`(function (,xs ...) ,info ,G ,def-env)
+             [(CFunction xs info blocks def-env)
               (define f (dict-ref info 'name))
-              (define f-start (symbol-append f 'start))
+              (define f-start (symbol-append f '_start))
               (define new-env (append (map cons xs arg-vals) def-env))
-              (parameterize ([get-CFG G])
-                ((interp-C-tail new-env) (dict-ref G f-start)))]
+              (parameterize ([get-basic-blocks blocks])
+                ((interp-C-tail new-env) (dict-ref blocks f-start)))]
              [else (error "interp-C, expected a function, not" f-val)])]
           [else
            ((super interp-C-exp env) ast)]
@@ -1173,12 +1177,12 @@
            (define arg-vals (map (interp-C-exp env) args))
            (define f-val ((interp-C-exp env) f))
            (match f-val
-             [`(function (,xs ...) ,info ,G ,def-env)
+             [(CFunction xs info blocks def-env)
               (define f (dict-ref info 'name))
-              (define f-start (symbol-append f 'start))
+              (define f-start (symbol-append f '_start))
               (define new-env (append (map cons xs arg-vals) def-env))
-              (parameterize ([get-CFG G])
-                ((interp-C-tail new-env) (dict-ref G f-start)))]
+              (parameterize ([get-basic-blocks blocks])
+                ((interp-C-tail new-env) (dict-ref blocks f-start)))]
              [else (error "interp-C, expected a funnction, not" f-val)])]
           [else
            ((super interp-C-tail env) ast)]
@@ -1189,8 +1193,8 @@
     (define/public (interp-C-def ast)
       (verbose "R4/interp-C-def" ast)
       (match ast
-        [(Def f `([,xs : ,ps] ...) rt info G)
-         (mcons f `(function ,xs ((name . ,f)) ,G ()))]
+        [(Def f `([,xs : ,ps] ...) rt info blocks)
+         (mcons f (CFunction xs `((name . ,f)) blocks '()))]
         [else
          (error "R4/interp-C-def unhandled" ast)]
         ))
@@ -1205,8 +1209,8 @@
          ;; tie the knot
          (for/list ([b top-level])
            (set-mcdr! b (match (mcdr b)
-                          [`(function ,xs ,info ,G ())
-                           `(function ,xs ,info ,G ,top-level)])))
+                          [(CFunction xs info blocks '())
+                           (CFunction xs info blocks top-level)])))
          ((interp-C-tail top-level) (TailCall (Var 'main) '()))]
         [else
          (error "R4/interp-C unhandled" ast)]
@@ -1226,7 +1230,7 @@
     ;; Hide function details to avoid spamming the debug output.
     (define/override (observe-value v)
       (match v
-	[`(function ,info ,G ,def-env)
+	[(X86Function info blocks def-env)
          `(function ,(dict-ref info 'name))]
         [else v]))
 
@@ -1234,7 +1238,7 @@
     
     (define/public (call-function f-val cont-ss env)
       (match f-val
-	[`(function ,info ,G ,def-env)
+	[(X86Function info blocks def-env)
 	 (debug "interp-x86 call-function" (observe-value f-val))
          (define n (dict-ref info 'num-params))
          (define f (dict-ref info 'name))
@@ -1255,9 +1259,9 @@
                                (append passing-regs def-env)))
          ;; interpret the body of the function in the new-env
          (define result-env
-           (parameterize ([get-CFG G])
+           (parameterize ([get-basic-blocks blocks])
              ((interp-x86-block new-env)
-              (dict-ref G (symbol-append f 'start)))))
+              (dict-ref blocks (symbol-append f '_start)))))
          (set! root-stack-pointer (- root-stack-pointer root-size))
          (define res (lookup 'rax result-env))
          ;; return and continue after the function call, back in env
@@ -1272,7 +1276,7 @@
             [(StackArg n)
              (define x (stack-arg-name n))
              (lookup x env)]
-            [(FunRef f)
+            #;[(FunRef f n)
              (lookup f env)]
             [else ((super interp-x86-exp env) ast)]))
         (copious "R4/interp-x86-exp" (observe-value result))
@@ -1331,8 +1335,8 @@
 
     (define/public (interp-x86-def ast)
       (match ast
-        [(Def f ps rt info G)
-         (mcons f `(function ,(dict-set info 'name f) ,G ()))]
+        [(Def f ps rt info blocks)
+         (cons f (X86Function (dict-set info 'name f) blocks '()))]
         ))
         
     ;; The below applies before register allocation
@@ -1340,41 +1344,33 @@
       (lambda (ast)
         (copious "R4/interp-pseudo-x86" ast)
 	(match ast
-          [(ProgramDefs info ds)
+          [(X86ProgramDefs info ds)
            ((initialize!) runtime-config:rootstack-size
                           runtime-config:heap-size)
            (set! root-stack-pointer (unbox rootstack_begin))
            (define top-level (for/list ([d ds]) (interp-x86-def d)))
-           ;; tie the knot
-           (for/list ([b top-level])
-             (set-mcdr! b (match (mcdr b)
-                            [`(function ,xs ,body ())
-                             `(function ,xs ,body ,top-level)])))
+           ;; Put the functions in the globals table
+           (for ([(label fun) (in-dict top-level)])
+             (dict-set! global-label-table label (box fun)))
+             
            (define env^ (list (cons 'r15 (unbox rootstack_begin))))
            (define result-env (call-function (lookup 'main top-level) '() env^))
            (lookup 'rax result-env)]
           )))
     
-    ;; The below applies after register allocation -JGS
+    ;; The below applies after register allocation -Jeremy
     (define/override (interp-x86 env)
       (lambda (ast)
         (verbose "R4/interp-x86" ast)
 	(match ast
-          [(ProgramDefs info ds)
+          [(X86ProgramDefs info ds)
            ((initialize!) runtime-config:rootstack-size
                           runtime-config:heap-size)
            (set! root-stack-pointer (unbox rootstack_begin))
            (define top-level (for/list ([d ds]) (interp-x86-def d)))
-           ;; tie the knot
-           (for/list ([b top-level])
-             (set-mcdr! b (match (mcdr b)
-                            [`(function ,xs ,body ())
-                             `(function ,xs ,body ,top-level)])))
-           ;; (define spills (dict-ref info 'num-spills))
-           ;; (define variable-size 8) ;; ugh -Jeremy
-           ;; (define root-size (* variable-size (cdr spills)))
-           ;; (define env^ (list (cons 'r15 (+ root-size
-           ;;                                  (unbox rootstack_begin)))))
+           ;; Put the functions in the globals table
+           (for ([(label fun) (in-dict top-level)])
+             (dict-set! global-label-table label (box fun)))
            (define env^ '())
            (define result-env
              (call-function (lookup 'main top-level) '() env^))
@@ -1404,9 +1400,9 @@
       (match op
          ['procedure-arity (lambda (v)
                             (match v
-                              [`(function (,xs ...) ,body ,lam-env)
+                              [(Function xs body lam-env)
                                (length xs)]
-                              [(vector `(function ,ps ,rst ...) vs ... `(arity ,n))
+                              [(vector (Function ps body env) vs ... `(arity ,n))
                                n]
                               [else
                                (error 'interp-op "expected function, not ~a" v)]
@@ -1420,7 +1416,7 @@
 	(verbose "R5/interp-scheme" ast)
 	(match ast
 	  [(Lambda `([,xs : ,Ts] ...) rT body)
-	   `(function ,xs ,body ,env)]
+	   (Function xs body env)]
 	  [else ((super interp-scheme-exp env) ast)]
           )))
 
@@ -1429,9 +1425,9 @@
         (define result
 	(match ast
 	  [(Lambda `([,xs : ,Ts] ...) rT body)
-	   `(function ,xs ,body ,env)]
+	   (Function xs body env)]
 	  [(Def f `([,xs : ,ps] ...) rt info body)
-	   (mcons f `(function ,xs ,body))]
+	   (mcons f (Function xs body '()))]
 	  [(ProgramDefs info ds)
 	   ((initialize!) runtime-config:rootstack-size
 	    runtime-config:heap-size)
@@ -1439,8 +1435,8 @@
 	     ;; tie the knot
 	     (for/list ([b top-level])
 	       (set-mcdr! b (match (mcdr b)
-			      [`(function ,xs ,body)
-			       `(function ,xs ,body ,top-level)])))
+			      [(Function xs body '())
+			       (Function xs body top-level)])))
 	     ((interp-F top-level) (Apply (Var 'main) '())))]
           [(Closure arity args)
 	   (define arg-vals (map (interp-F env) args))
@@ -1459,6 +1455,13 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Interpreters for R6: type Any and inject/project
+
+(define (crop-to-64bits n)
+  (let ([s (string->list (number->string n 2))])
+    (cond [(> (length s) 64)
+           (let ([s^ (list-tail s (- (length s) 64))])
+             (string->number (list->string s^) 2))]
+          [else n])))
 
 (define interp-R6-class-alt
   (class interp-R5-class
@@ -1524,6 +1527,9 @@
          ['any-vector-length (lambda (v)
                                (match v [`(tagged ,v^ ,tg)
                                          (vector-length v^)]))]
+         ['any-vectorof-length (lambda (v)
+                                 (match v [`(tagged ,v^ ,tg)
+                                           (vector-length v^)]))]
 	 [else (super interp-op op)]
 	 ))
 
@@ -1578,13 +1584,13 @@
            #:when (andmap symbol? xs)
            #;(define anys (for/list ([x xs]) 'Any))
            #;(mcons f `(tagged (lambda ,xs ,body) (,anys -> Any)))
-           (mcons f `(function ,xs ,body))]
+           (mcons f (Function xs body '()))]
 	  [(Lambda xs _ body)
            #:when (andmap symbol? xs)
            #;(define anys (for/list ([x xs]) 'Any))
 	   #;`(tagged ,(lambda ,xs ,body ,env) (,anys -> Any))
-           `(function ,xs ,body ,env)]
-	  [(FunRefArity f n)
+           (Function xs body env)]
+	  [(FunRef f n)
 	   (lookup f env)]
           [(Prim 'and (list e1 e2))
            (if ((interp-F env) e1)
@@ -1592,8 +1598,6 @@
                #f)]
 	  [(Prim op args)
            (apply (interp-op op) (map (interp-F env) args))]
-          [(Exit)
-           (error 'interp-F "exiting")]
 	  [(ProgramDefs info ds)
 	   ((initialize!) runtime-config:rootstack-size
 	    runtime-config:heap-size)
@@ -1604,8 +1608,8 @@
                               ;; the following belongs in new R7 interp
                              #;[`(tagged (lambda ,xs ,body) ,t)
                                `(tagged (lambda ,xs ,body ,top-level) ,t)]
-			      [`(function ,xs ,body)
-			       `(function ,xs ,body ,top-level)])))
+			      [(Function xs body '())
+			       (Function xs body top-level)])))
 	     ((interp-F top-level) (Apply (Var 'main) '())))]
 	  [else ((super interp-F env) ast)]
 	  ))
@@ -1630,8 +1634,6 @@
 	       (error "in project, expected injected value" v)])]
           [(ValueOf e ty)
            ((interp-op 'value-of-any) ((interp-C-exp env) e))]
-          [(Exit)
-           (error 'interp-C-exp "exiting")]
 	  [else
 	   ((super interp-C-exp env) ast)]
 	  ))
@@ -1658,12 +1660,6 @@
 		`(tagged void Void)])]
 	[else (super display-by-type ty val)]))
 
-    (inherit-field x86-ops)
-    (set! x86-ops (hash-set* x86-ops
-		   'orq `(2 ,bitwise-ior)
-		   'salq `(2 ,(lambda (n v) (arithmetic-shift v n)))
-		   ))
-
     )) ;; interp-R6-class-alt
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1679,7 +1675,7 @@
       (match fun-val
         #;[`(tagged ,fun-val^ ,t) ;; for dynamically typed
            (apply-fun interp fun-val^ arg-vals)]
-        [`(function (,xs ...) ,body ,lam-env)
+        [(Function xs body lam-env)
          (define new-env (append (for/list ([x xs] [arg arg-vals])
                                    (cons x (box arg)))
                                  lam-env))
@@ -1703,9 +1699,9 @@
 	     ;; tie the knot
 	     (for/list ([b top-level])
 	       (set-mcdr! b (match (mcdr b)
-			      [`(function ,xs ,body)
-			       `(function ,xs ,body ,top-level)])))
-	     ((interp-F top-level) (Apply (FunRef 'main) '())))]
+			      [(Function xs body '())
+			       (Function xs body top-level)])))
+	     ((interp-F top-level) (Apply (FunRef 'main 0) '())))]
           [(WhileLoop cnd body)
            (define (loop)
              (cond [((interp-F env) cnd)
@@ -1751,6 +1747,7 @@
     (inherit memory-read memory-write! call-function interp-x86-exp)
 
     (define (interp-vector-length vec)
+      (copious "gradual/interp-vector-length" vec)
       (define tag ((memory-read) vec))
       (bitwise-and #b111111 (arithmetic-shift tag -1)))
 
@@ -1773,8 +1770,10 @@
       (equal? 1 (bitwise-and (arithmetic-shift tag -57) 1)))
     
     (define (proxy-vector-length vec)
+      (copious "gradual/proxy-vector-length" vec)
       (cond [(vector-proxy? vec)
              (define vec^ (interp-vector-ref vec 0))
+             (copious "proxy: underlying vec " vec^)
              (proxy-vector-length vec^)]
             [else (interp-vector-length vec)]))
     
@@ -1818,3 +1817,70 @@
           )))
     
     ))
+
+(define min-int64 (- (arithmetic-shift 1 63)))
+(define max-int64 (sub1 (arithmetic-shift 1 63)))
+(define mask-64 (sub1 (arithmetic-shift 1 64)))
+(define offset-64 (arithmetic-shift 1 63))
+(define (to-signed x)
+  (- (bitwise-and (+ x offset-64) mask-64) offset-64))
+(define (+i64 x y)
+  (to-signed (+ x y)))
+(define (-i64 x y)
+  (to-signed (- x y)))
+(define (*i64 x y)
+  (to-signed (* x y)))
+(define (neg-i64 x)
+  (to-signed (- x)))
+
+;; Interpreter interface so that python-generated x86 code can be interpreted
+;; using the racket x86 emulator
+(define (interp-x86-python-mixin base-class)
+  (class base-class
+    (super-new)
+    (inherit-field x86-ops)
+    (set! x86-ops (hash-set* x86-ops
+                             'addq `(2 ,+i64)
+                             'imulq `(2 ,*i64)
+                             'subq `(2 ,(lambda (s d) (-i64 d s)))
+                             'negq `(1 ,neg-i64)))
+
+    (define/override (interp-x86-instr env)
+      (lambda (ast)
+        (when (pair? ast)
+          (copious "interp-x86-python/interp-x86-instr" (car ast)))
+        (match ast
+          [(cons (Callq 'read_int _) ss)
+           (let ([v (min max-int64 (max min-int64 (read)))])
+             (copious "read " v)
+             ((interp-x86-instr (cons (cons 'rax v) env)) ss))]
+          [(cons (Callq 'print_int _) ss)
+           (printf "~a" (lookup 'rdi env))
+           ((interp-x86-instr env) ss)]
+          [else ((super interp-x86-instr env) ast)])))
+    (define/override (eflags-status env cc)
+      (match cc
+        ['ne (if (not (eqv? 1 (eflags-status env 'e))) 1 0)]
+        [else (super eflags-status env cc)]))))
+
+(define choose-base-interp-class
+  (λ (program)
+    (match program
+      [(X86Program info body) interp-R3-class]
+      [(X86ProgramDefs info blocks) interp-gradual-class]
+      [else (error "choose-base-interp no match in for" program)])))
+
+(define interp-pseudo-x86-python
+  (lambda (p)
+    ((send (new (interp-x86-python-mixin (choose-base-interp-class p)))
+           interp-pseudo-x86 '()) p)))
+
+;; The interp-x86-python interpreter takes a program of the form
+;; (X86Program info blocks)
+;; Also, the info field must be an association list
+;; with a key 'num-root-spills whose values is
+;; the number of spills to the root stack.
+(define interp-x86-python
+  (lambda (p)
+    ((send (new (interp-x86-python-mixin (choose-base-interp-class p)))
+           interp-x86 '()) p)))

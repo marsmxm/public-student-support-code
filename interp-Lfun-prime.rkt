@@ -1,21 +1,20 @@
 #lang racket
-(require "interp-Rvec-prime.rkt")
-(require "interp-Rfun.rkt")
+(require "interp-Lvecof-prime.rkt")
+(require "interp-Lvec-prime.rkt")
+(require "interp-Lfun.rkt")
 (require "utilities.rkt")
 (require (prefix-in runtime-config: "runtime-config.rkt"))
-(provide interp-Rfun-prime interp-Rfun-prime-mixin interp-Rfun-prime-class)
+(provide interp-Lfun-prime interp-Lfun-prime-mixin interp-Lfun-prime-class)
 
-(define (interp-Rfun-prime-mixin super-class)
+(define (interp-Lfun-prime-mixin super-class)
   (class super-class
     (super-new)
     (inherit initialize! interp-def)
 
     (define/override ((interp-exp env) e)
-      (verbose "Rfun'/interp-exp" e)
+      (verbose "Lfun'/interp-exp" e)
       (match e
-        [(FunRef f)
-         (unbox (lookup f env))]
-        [(FunRefArity f n)
+        [(FunRef f n)
          (unbox (lookup f env))]
         [else ((super interp-exp env) e)]
         ))
@@ -29,14 +28,17 @@
          (define top-level (for/list ([d ds]) (interp-def d)))
          (for ([f (in-dict-values top-level)])
            (set-box! f (match (unbox f)
-                         [`(function ,xs ,body ())
-                          `(function ,xs ,body ,top-level)])))
+                         [(Function xs body '())
+                          (Function xs body top-level)])))
          ((interp-exp top-level) (Apply (Var 'main) '()))]))
         
     ))
 
-(define interp-Rfun-prime-class (interp-Rfun-prime-mixin
-                               (interp-Rvec-prime-mixin interp-Rfun-class)))
+(define interp-Lfun-prime-class
+  (interp-Lfun-prime-mixin
+   (interp-Lvecof-prime-mixin
+    (interp-Lvec-prime-mixin
+     interp-Lfun-class))))
     
-(define (interp-Rfun-prime p)
-  (send (new interp-Rfun-prime-class) interp-program p))
+(define (interp-Lfun-prime p)
+  (send (new interp-Lfun-prime-class) interp-program p))
