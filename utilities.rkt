@@ -2272,9 +2272,13 @@ Changelog:
 	    [res (wait-or-timeout control-fun timeout)]
 	    [result (cond [(symbol=? res 'timed-out)
                            `(error timed-out ,timeout)]
+                          ;; We're using the exit code as the result of the program.
+                          ;; It does not matter whether the exit code is nonzero
+                          ;; (a traditional error in Unix) or zero (traditional success).
 			  [(symbol=? res 'done-error)
-                           `(error done-error ,(control-fun 'exit-code))]
-			  [else `(result done ,(read-line in1))])])
+                           `(result done ,(control-fun 'exit-code))]
+                          [else `(result done ,(control-fun 'exit-code))]
+                          )])
        (close-input-port in1)
        (close-input-port inErr)
        (close-output-port out)
@@ -2315,7 +2319,6 @@ Changelog:
 				 (check-not-false gcc-output "Unable to run program, gcc reported assembly failure")
 				 (check-not-equal? (cadr result) 'timed-out (format "x86 execution timed out after ~a seconds" (caddr result)))
 				 (cond [error-expected
-					(check-equal? (cadr result) 'done-error (format "expected error, not: ~a" (caddr result)))
 					(check-equal? (caddr result) 255 (format "expected error, not: ~a" (caddr result)))]
 				       [else
 					(check-not-eq? (cadr result) eof "x86 execution did not produce output")
@@ -2516,8 +2519,6 @@ Changelog:
 (define (make-lets bs e)
   (match bs
     [`() e]
-    #;[`((_ . ,e^) . ,bs^)
-       (Seq e^ (make-lets bs^ e))]
     [`((_ . ,e^) . ,bs^)
      (Begin (list e^) (make-lets bs^ e))]
     [`((,x . ,e^) . ,bs^)
